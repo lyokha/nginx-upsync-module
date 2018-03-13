@@ -86,6 +86,9 @@ typedef struct {
     ngx_int_t                        upsync_lb;
     ngx_uint_t                       strong_dependency;
 
+    ngx_uint_t                       consul_services_max_fails;
+    ngx_msec_t                       consul_services_fail_timeout;
+
     ngx_str_t                        upsync_send;
     ngx_str_t                        upsync_dump_path;
 
@@ -159,6 +162,10 @@ static char *ngx_http_upsync_set_lb(ngx_conf_t *cf, ngx_command_t *cmd,
 static char *ngx_http_upsync_server(ngx_conf_t *cf, 
     ngx_command_t *cmd, void *conf);
 static char *ngx_http_upsync_set_conf_dump(ngx_conf_t *cf, 
+    ngx_command_t *cmd, void *conf);
+static char *ngx_http_upsync_consul_services_max_fails(ngx_conf_t *cf, 
+    ngx_command_t *cmd, void *conf);
+static char *ngx_http_upsync_consul_services_fail_timeout(ngx_conf_t *cf, 
     ngx_command_t *cmd, void *conf);
 
 static void *ngx_http_upsync_create_main_conf(ngx_conf_t *cf);
@@ -286,6 +293,20 @@ static ngx_command_t  ngx_http_upsync_commands[] = {
     {  ngx_string("upsync_dump_path"),
         NGX_HTTP_UPS_CONF|NGX_CONF_TAKE1,
         ngx_http_upsync_set_conf_dump,
+        NGX_HTTP_SRV_CONF_OFFSET,
+        0,
+        NULL },
+
+    {  ngx_string("upsync_consul_services_max_fails"),
+        NGX_HTTP_UPS_CONF|NGX_CONF_TAKE1,
+        ngx_http_upsync_consul_services_max_fails,
+        NGX_HTTP_SRV_CONF_OFFSET,
+        0,
+        NULL },
+
+    {  ngx_string("upsync_consul_services_fail_timeout"),
+        NGX_HTTP_UPS_CONF|NGX_CONF_TAKE1,
+        ngx_http_upsync_consul_services_fail_timeout,
         NGX_HTTP_SRV_CONF_OFFSET,
         0,
         NULL },
@@ -632,6 +653,46 @@ ngx_http_upsync_set_conf_dump(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     upscf->conf_file = ngx_conf_open_file(cf->cycle, &value[1]); 
     if (upscf->conf_file == NULL) {
+        return NGX_CONF_ERROR; 
+    }
+
+    return NGX_CONF_OK;
+}
+
+
+static char *
+ngx_http_upsync_consul_services_max_fails(ngx_conf_t *cf, ngx_command_t *cmd,
+    void *conf)
+{
+    ngx_str_t                         *value;
+    ngx_http_upsync_srv_conf_t        *upscf;
+
+    upscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_upsync_module);
+    value = cf->args->elts;
+
+    upscf->consul_services_max_fails = ngx_atoi(value[1].data, value[1].len);
+
+    if (upscf->consul_services_max_fails == (ngx_uint_t) NGX_ERROR) {
+        return NGX_CONF_ERROR; 
+    }
+
+    return NGX_CONF_OK;
+}
+
+
+static char *
+ngx_http_upsync_consul_services_fail_timeout(ngx_conf_t *cf, ngx_command_t *cmd,
+    void *conf)
+{
+    ngx_str_t                         *value;
+    ngx_http_upsync_srv_conf_t        *upscf;
+
+    upscf = ngx_http_conf_get_module_srv_conf(cf, ngx_http_upsync_module);
+    value = cf->args->elts;
+
+    upscf->consul_services_fail_timeout = ngx_parse_time(&value[1], 0);
+
+    if (upscf->consul_services_fail_timeout == (ngx_msec_t) NGX_ERROR) {
         return NGX_CONF_ERROR; 
     }
 
@@ -1442,8 +1503,8 @@ ngx_http_upsync_consul_services_parse_json(void *data)
 
         /* default value, server attribute */
         upstream_conf->weight = 1;
-        upstream_conf->max_fails = 2;
-        upstream_conf->fail_timeout = 10;
+        upstream_conf->max_fails = upsync_server->upscf->consul_services_max_fails;
+        upstream_conf->fail_timeout = upsync_server->upscf->consul_services_fail_timeout;
 
         upstream_conf->down = 0;
         upstream_conf->backup = 0;
@@ -1987,6 +2048,9 @@ ngx_http_upsync_create_srv_conf(ngx_conf_t *cf)
 
     upscf->strong_dependency = NGX_CONF_UNSET_UINT;
 
+    upscf->consul_services_max_fails = NGX_CONF_UNSET_UINT;
+    upscf->consul_services_fail_timeout = NGX_CONF_UNSET_MSEC;
+
     upscf->conf_file = NGX_CONF_UNSET_PTR;
 
     upscf->upsync_type_conf = NGX_CONF_UNSET_PTR;
@@ -2036,6 +2100,14 @@ ngx_http_upsync_init_srv_conf(ngx_conf_t *cf, void *conf, ngx_uint_t num)
 
     if (upscf->strong_dependency == NGX_CONF_UNSET_UINT) {
         upscf->strong_dependency = 0;
+    }
+
+    if (upscf->consul_services_max_fails == NGX_CONF_UNSET_UINT) {
+        upscf->consul_services_max_fails = 2;
+    }
+
+    if (upscf->consul_services_fail_timeout == NGX_CONF_UNSET_MSEC) {
+        upscf->consul_services_fail_timeout = 1000 * 10;
     }
 
     if (upscf->upsync_dump_path.len == NGX_CONF_UNSET_SIZE) {
